@@ -109,6 +109,7 @@ public class DiscordAudioStreamBot extends ListenerAdapter {
     private InputDeviceDescriptor standaloneInputDescriptor;
     private ListenHandler standaloneLoopbackOutput;
     private String standaloneLoopbackPlaybackDevice;
+    private String standaloneLoopbackFailedPlaybackDevice;
     private String standaloneRoutingLogState;
 
     // convenience
@@ -789,10 +790,15 @@ public class DiscordAudioStreamBot extends ListenerAdapter {
             closeStandaloneLoopbackOutput();
             return;
         }
+        if (standaloneLoopbackOutput == null
+                && Objects.equals(standaloneLoopbackFailedPlaybackDevice, playbackDevice)) {
+            return;
+        }
         if (standaloneLoopbackOutput != null && Objects.equals(standaloneLoopbackPlaybackDevice, playbackDevice)) {
             refreshConnectedSendLoopbackRouting();
             return;
         }
+        standaloneLoopbackFailedPlaybackDevice = null;
         closeStandaloneLoopbackOutput();
         try {
             standaloneLoopbackOutput = new ListenHandler();
@@ -802,6 +808,7 @@ public class DiscordAudioStreamBot extends ListenerAdapter {
             logger.info("Started standalone loopback output for '{}'",
                     playbackDevice != null ? playbackDevice : "(Default playback device)");
         } catch (Exception ex) {
+            standaloneLoopbackFailedPlaybackDevice = playbackDevice;
             logger.warn("Failed to start standalone loopback output for '{}'",
                     playbackDevice != null ? playbackDevice : "(Default playback device)",
                     ex);

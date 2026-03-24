@@ -342,9 +342,9 @@ public class SettingsPanel extends JPanel {
             icon = new ImageIcon(Utils.overlayImage((BufferedImage) icon.getImage(), Utils.getIcon("runee/32px/strike-through.png", 24, true).getImage()));
         }
         listenEnabled.setIcon(icon);
-        playbackDevices.setEnabled(true);
+        playbackDevices.setEnabled(enabled);
         outputLevelBar.setEnabled(DiscordAudioStreamBot.getConfig().getSpeakEnabled() || enabled);
-        outputTestTone.setEnabled(true);
+        outputTestTone.setEnabled(enabled);
         updateOutputVolumeEnabled();
     }
 
@@ -354,7 +354,8 @@ public class SettingsPanel extends JPanel {
     }
 
     private void updateOutputVolumeEnabled() {
-        outputVolume.setEnabled(true);
+        outputVolume.setEnabled(DiscordAudioStreamBot.getConfig().getSpeakEnabled()
+                || DiscordAudioStreamBot.getConfig().getListenEnabled());
     }
 
     private void refreshAudioLevels() {

@@ -39,6 +39,7 @@ public class ListenHandler implements AudioReceiveHandler, Closeable {
     private static final double TEST_TONE_FREQUENCY = 440.0d;
     private static final int TEST_TONE_AMPLITUDE = 12000;
     private static final String PULSE_PLAYBACK_PREFIX = "pulse:";
+    private static final String PULSE_STREAM_TARGET_PREFIX = "pulse-stream:";
     private static final List<ListenHandler> activeHandlers = new ArrayList<>();
     private static volatile String standaloneVisualPlaybackDeviceId;
     private static volatile double standaloneVisualLevel;
@@ -138,8 +139,18 @@ public class ListenHandler implements AudioReceiveHandler, Closeable {
         return sinkName != null ? PULSE_PLAYBACK_PREFIX + sinkName : null;
     }
 
+    public static String buildPulseStreamTargetPlaybackId(String sinkName, String streamDisplayName) {
+        if (sinkName == null) {
+            return null;
+        }
+        String encodedDisplay = streamDisplayName != null ? streamDisplayName.replace("|", "/") : "";
+        return PULSE_STREAM_TARGET_PREFIX + sinkName + "|" + encodedDisplay;
+    }
+
     public static boolean isPulsePlaybackDeviceId(String playbackDeviceId) {
-        return playbackDeviceId != null && playbackDeviceId.startsWith(PULSE_PLAYBACK_PREFIX);
+        return playbackDeviceId != null
+                && (playbackDeviceId.startsWith(PULSE_PLAYBACK_PREFIX)
+                || playbackDeviceId.startsWith(PULSE_STREAM_TARGET_PREFIX));
     }
 
     @Override
@@ -388,7 +399,7 @@ public class ListenHandler implements AudioReceiveHandler, Closeable {
             throw new RuntimeException("pacat is not available for Pulse playback");
         }
 
-        String sinkName = playbackDeviceId.substring(PULSE_PLAYBACK_PREFIX.length());
+        String sinkName = resolvePulseSinkName(playbackDeviceId);
         if (sinkName.isBlank()) {
             throw new RuntimeException("Invalid Pulse playback device id: " + playbackDeviceId);
         }
@@ -409,6 +420,21 @@ public class ListenHandler implements AudioReceiveHandler, Closeable {
         } catch (IOException ex) {
             throw new RuntimeException("Failed to open Pulse playback device '" + sinkName + "'", ex);
         }
+    }
+
+    private String resolvePulseSinkName(String playbackDeviceId) {
+        if (playbackDeviceId == null) {
+            return "";
+        }
+        if (playbackDeviceId.startsWith(PULSE_PLAYBACK_PREFIX)) {
+            return playbackDeviceId.substring(PULSE_PLAYBACK_PREFIX.length());
+        }
+        if (playbackDeviceId.startsWith(PULSE_STREAM_TARGET_PREFIX)) {
+            String encoded = playbackDeviceId.substring(PULSE_STREAM_TARGET_PREFIX.length());
+            int separator = encoded.indexOf('|');
+            return separator >= 0 ? encoded.substring(0, separator) : encoded;
+        }
+        return playbackDeviceId;
     }
 
     public static Mixer findJavaSoundOutputMixer(String playbackDeviceId) {

@@ -68,6 +68,78 @@
 * Follow the build steps above, then:
   * `gradle run`
 
+### Linux (PipeWire / PulseAudio)
+
+For a normal virtual audio cable on modern Linux, `snd-aloop` is not required.
+The simplest setup is a PipeWire/Pulse virtual sink created through `pactl`.
+
+#### Install the required tools
+
+Arch Linux / CachyOS:
+* `sudo pacman -S qpwgraph pipewire-pulse`
+
+Debian / Ubuntu:
+* `sudo apt install qpwgraph pipewire-pulse`
+
+Fedora:
+* `sudo dnf install qpwgraph pipewire-pulseaudio`
+
+CentOS Stream / RHEL-like:
+* `sudo dnf install epel-release`
+* `sudo dnf install qpwgraph pipewire-pulseaudio`
+
+openSUSE:
+* `sudo zypper install qpwgraph pipewire-pulseaudio`
+
+If `qpwgraph` is not available in your repositories, install the PipeWire/Pulse packages first and then use any equivalent PipeWire graph viewer available on your system.
+
+#### Create a temporary virtual cable
+* `pactl load-module module-null-sink sink_name=discordbot sink_properties=device.description=DiscordBot-Cable`
+
+#### Create a persistent virtual cable
+
+Create the directory if needed:
+* `mkdir -p ~/.config/pipewire/pipewire-pulse.conf.d`
+
+Create a file such as `~/.config/pipewire/pipewire-pulse.conf.d/discordbot-cable.conf` with:
+
+```ini
+pulse.cmd = [
+  { cmd = "load-module" args = "module-null-sink sink_name=discordbot sink_properties=device.description=DiscordBot-Cable" }
+]
+```
+
+Then restart the user audio services or log out and back in:
+* `systemctl --user restart pipewire pipewire-pulse wireplumber`
+
+#### Verify that it exists
+* `wpctl status`
+
+#### Open the graph and connect it
+* `qpwgraph`
+
+In `qpwgraph`, the usual routing is:
+* application source (`Firefox`, `Chromium`, `VLC`, etc.) -> `DiscordBot-Cable` `playback_FL` / `playback_FR`
+* if you also want to keep hearing the sound:
+  * `DiscordBot-Cable` `monitor_FL` / `monitor_FR` -> your real output device (`Astro MixAmp Pro Game`, etc.)
+
+Important notes:
+* `pactl load-module module-null-sink ...` is enough to create the virtual cable
+* PipeWire loads its PulseAudio-compatible modules through `pactl`
+* the virtual sink can also be made persistent with a file under `~/.config/pipewire/pipewire-pulse.conf.d/*.conf`
+* `qpwgraph` is for visualizing and connecting audio nodes
+* `wpctl status` is mainly for inspecting sinks, sources, filters and streams
+
+#### Optional fallback: ALSA loopback (`snd-aloop`)
+
+`snd-aloop` is a separate ALSA loopback device.
+It is mainly useful as a workaround when an application does not correctly see PipeWire/PulseAudio virtual sources.
+
+Useful notes:
+* `snd-aloop` is not required for the normal PipeWire virtual-cable setup above
+* it creates a full-duplex loopback sound card with two crossed sides
+* `aplay -l` and `arecord -l` are mainly useful to inspect this ALSA loopback or for diagnostics, not to create the PipeWire cable itself
+
 ## Downloads
 >[Releases](https://github.com/BinkanSalaryman/Discord-Audio-Stream-Bot/releases)
 
