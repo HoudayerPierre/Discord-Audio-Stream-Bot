@@ -1,0 +1,42 @@
+<!DOCTYPE patchbay>
+<patchbay name="Discord Audio Stream Bot" version="1.0.0">
+ <items>
+  <item node-type="pipewire" port-type="pipewire-audio">
+   <output node="DiscordBot-Cable" port="DiscordBot-Cable:monitor_FL"/>
+   <input node="parec/discord-audio-stream-bot-capture-1" port="discord-audio-stream-bot-capture:input_FL"/>
+  </item>
+  <item node-type="pipewire" port-type="pipewire-audio">
+   <output node="Chromium-1" port="Chromium:output_FL"/>
+   <input node="DiscordBot-Cable" port="DiscordBot-Cable:playback_FL"/>
+  </item>
+  <item node-type="pipewire" port-type="pipewire-audio">
+   <output node="parec/discord-audio-stream-bot-capture-1" port="discord-audio-stream-bot-capture:monitor_FL"/>
+   <input node="Astro MixAmp Pro Game" port="USB Audio #1:playback_FL"/>
+  </item>
+  <item node-type="pipewire" port-type="pipewire-audio">
+   <output node="DiscordBot-Cable" port="DiscordBot-Cable:monitor_FR"/>
+   <input node="parec/discord-audio-stream-bot-capture-1" port="discord-audio-stream-bot-capture:input_FR"/>
+  </item>
+  <item node-type="pipewire" port-type="pipewire-audio">
+   <output node="Chromium-1" port="Chromium:output_FR"/>
+   <input node="DiscordBot-Cable" port="DiscordBot-Cable:playback_FR"/>
+  </item>
+  <item node-type="pipewire" port-type="pipewire-audio">
+   <output node="Chromium" port="Chromium:output_FR"/>
+   <input node="DiscordBot-Cable" port="DiscordBot-Cable:playback_FR"/>
+  </item>
+  <item node-type="pipewire" port-type="pipewire-audio">
+   <output node="DiscordBot-Cable" port="DiscordBot-Cable:monitor_FR"/>
+   <input node="parec/discord-audio-stream-bot-capture-2" port="discord-audio-stream-bot-capture:input_FR"/>
+  </item>
+  <item node-type="pipewire" port-type="pipewire-audio">
+   <output node="Chromium" port="Chromium:output_FL"/>
+   <input node="DiscordBot-Cable" port="DiscordBot-Cable:playback_FL"/>
+  </item>
+  <item node-type="pipewire" port-type="pipewire-audio">
+   <output node="DiscordBot-Cable" port="DiscordBot-Cable:monitor_FL"/>
+   <input node="parec/discord-audio-stream-bot-capture-2" port="discord-audio-stream-bot-capture:input_FL"/>
+  </item>
+ </items>
+</patchbay>
+

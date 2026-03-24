@@ -6,6 +6,6 @@ import net.runee.gui.listitems.RecordingDeviceItem;
 public class RecordingDeviceListCellRenderer extends net.gui.renderer.StandardListCellRenderer<RecordingDeviceItem> {
     @Override
     protected void apply(RecordingDeviceItem value) {
-        setText(value != null ? value.getName() : "(Default recording device)");
+        setText(value != null && value.getDescriptor() != null ? value.getDescriptor().getListLabel() : "(Default recording device)");
     }
 }

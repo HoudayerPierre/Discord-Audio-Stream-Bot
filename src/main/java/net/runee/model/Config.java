@@ -1,5 +1,6 @@
 package net.runee.model;
 
+import com.google.gson.annotations.SerializedName;
 import net.dv8tion.jda.api.entities.Guild;
 
 import java.util.ArrayList;
@@ -11,12 +12,18 @@ public class Config {
     public Boolean autoLogin;
     public Boolean speakEnabled;
     public String recordingDevice;
+    public String recordingBackend;
+    public String recordingDeviceId;
+    public String recordingDeviceName;
     public Boolean listenEnabled;
     public String playbackDevice;
     public List<GuildConfig> guildConfigs;
     public Boolean speakThresholdEnabled;
 
     public Double speakThreshold;
+    public Double inputVolume;
+    @SerializedName(value = "outputVolume", alternate = {"playbackVolume"})
+    public Double outputVolume;
 
     public Config() {
 
@@ -27,8 +34,13 @@ public class Config {
         this.autoLogin = copy.autoLogin;
         this.speakEnabled = copy.speakEnabled;
         this.recordingDevice = copy.recordingDevice;
+        this.recordingBackend = copy.recordingBackend;
+        this.recordingDeviceId = copy.recordingDeviceId;
+        this.recordingDeviceName = copy.recordingDeviceName;
         this.listenEnabled = copy.listenEnabled;
         this.playbackDevice = copy.playbackDevice;
+        this.inputVolume = copy.inputVolume;
+        this.outputVolume = copy.outputVolume;
         if(copyGuildConfigs && copy.guildConfigs != null) {
             this.guildConfigs = new ArrayList<>();
             for (GuildConfig guildConfig : copy.guildConfigs) {
@@ -55,6 +67,14 @@ public class Config {
 
     public double getSpeakThreshold() {
         return speakThreshold != null ? speakThreshold : 0.5d;
+    }
+
+    public double getInputVolume() {
+        return inputVolume != null ? inputVolume : 1.0d;
+    }
+
+    public double getOutputVolume() {
+        return outputVolume != null ? outputVolume : 1.0d;
     }
 
     public GuildConfig getGuildConfig(Guild guild) {

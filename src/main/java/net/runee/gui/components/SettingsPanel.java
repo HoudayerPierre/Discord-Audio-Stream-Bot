@@ -1,10 +1,14 @@
 package net.runee.gui.components;
 
 import com.jgoodies.forms.builder.FormBuilder;
-import jouvieje.bass.Bass;
-import jouvieje.bass.structures.BASS_DEVICEINFO;
 import net.dv8tion.jda.api.JDA;
 import net.runee.DiscordAudioStreamBot;
+import net.runee.ListenHandler;
+import net.runee.SpeakHandler;
+import net.runee.audio.InputDeviceDescriptor;
+import net.runee.audio.InputDeviceService;
+import net.runee.audio.PlaybackDeviceDescriptor;
+import net.runee.audio.PlaybackDeviceService;
 import net.runee.gui.renderer.PlaybackDeviceListCellRenderer;
 import net.runee.gui.renderer.RecordingDeviceListCellRenderer;
 import net.runee.gui.listitems.PlaybackDeviceItem;
@@ -14,22 +18,32 @@ import net.runee.gui.listitems.RecordingDeviceItem;
 import net.runee.model.Config;
 
 import javax.swing.*;
+import java.awt.event.HierarchyEvent;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.util.List;
 import java.util.Objects;
 
 public class SettingsPanel extends JPanel {
     // general
-    private JTextField botToken;
+    private JPasswordField botToken;
+    private JCheckBox hideToken;
     private JCheckBox autoLogin;
 
     // audio
     private JButton speakEnabled;
     private JButton listenEnabled;
+    private JButton testTone;
+    private JButton outputTestTone;
     private JList<RecordingDeviceItem> recordingDevices;
     private JList<PlaybackDeviceItem> playbackDevices;
     private JCheckBox speakThresholdEnabled;
     private JSlider speakThreshold;
+    private JSlider inputVolume;
+    private JSlider outputVolume;
+    private AudioLevelBar inputLevelBar;
+    private AudioLevelBar outputLevelBar;
+    private Timer levelTimer;
 
     public SettingsPanel() {
         initComponents();
@@ -41,12 +55,15 @@ public class SettingsPanel extends JPanel {
         final DiscordAudioStreamBot bot = DiscordAudioStreamBot.getInstance();
 
         // general
-        botToken = new JTextField();
+        botToken = new JPasswordField();
         Utils.addChangeListener(botToken, e -> {
-            DiscordAudioStreamBot.getConfig().botToken = Utils.emptyStringToNull(((JTextField) e.getSource()).getText());
+            DiscordAudioStreamBot.getConfig().botToken = Utils.emptyStringToNull(new String(((JPasswordField) e.getSource()).getPassword()));
             updateAutoLoginEnabled();
             saveConfig();
         });
+        hideToken = new JCheckBox("Hide");
+        hideToken.setSelected(true);
+        hideToken.addActionListener(e -> updateTokenVisibility());
         autoLogin = new JCheckBox();
         autoLogin.addActionListener(e -> {
             final Config cfg = DiscordAudioStreamBot.getConfig();
@@ -71,15 +88,19 @@ public class SettingsPanel extends JPanel {
             updateListenEnabled();
             saveConfig();
         });
+        testTone = new JButton("Test tone");
+        testTone.addActionListener(e -> bot.playSendTestTone());
+        outputTestTone = new JButton("Output test");
+        outputTestTone.addActionListener(e -> bot.playOutputTestTone());
         recordingDevices = new JList<>();
         recordingDevices.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         recordingDevices.setCellRenderer(new RecordingDeviceListCellRenderer());
         recordingDevices.addListSelectionListener(e -> {
-            if (recordingDevices.getSelectedIndex() >= 0) {
+            if (!e.getValueIsAdjusting() && recordingDevices.getSelectedIndex() >= 0) {
                 RecordingDeviceItem value = recordingDevices.getSelectedValue();
-                String recordingDevice = value != null ? value.getName() : null;
+                InputDeviceDescriptor recordingDevice = value != null ? value.getDescriptor() : null;
                 bot.setRecordingDevice(recordingDevice);
-                DiscordAudioStreamBot.getConfig().recordingDevice = recordingDevice;
+                InputDeviceService.applySelection(DiscordAudioStreamBot.getConfig(), recordingDevice);
                 saveConfig();
             }
         });
@@ -89,7 +110,7 @@ public class SettingsPanel extends JPanel {
         playbackDevices.addListSelectionListener(e -> {
             if (playbackDevices.getSelectedIndex() >= 0) {
                 PlaybackDeviceItem value = playbackDevices.getSelectedValue();
-                String playbackDevice = value != null ? value.getName() : null;
+                String playbackDevice = value != null ? value.getId() : null;
                 bot.setPlaybackDevice(playbackDevice);
                 DiscordAudioStreamBot.getConfig().playbackDevice = playbackDevice;
                 saveConfig();
@@ -111,6 +132,39 @@ public class SettingsPanel extends JPanel {
                 cfg.speakThreshold = speakThreshold.getValue() * (1d/100d);
             }
         });
+        inputVolume = new JSlider();
+        inputVolume.setMinimum(0);
+        inputVolume.setMaximum(150);
+        inputVolume.addChangeListener(e -> {
+            final Config cfg = DiscordAudioStreamBot.getConfig();
+            cfg.inputVolume = inputVolume.getValue() / 100d;
+            if (!inputVolume.getValueIsAdjusting()) {
+                saveConfig();
+            }
+        });
+        outputVolume = new JSlider();
+        outputVolume.setMinimum(0);
+        outputVolume.setMaximum(150);
+        outputVolume.addChangeListener(e -> {
+            final Config cfg = DiscordAudioStreamBot.getConfig();
+            cfg.outputVolume = outputVolume.getValue() / 100d;
+            if (!outputVolume.getValueIsAdjusting()) {
+                saveConfig();
+            }
+        });
+        inputLevelBar = new AudioLevelBar();
+        outputLevelBar = new AudioLevelBar();
+        outputLevelBar.setForceMinimumVisibleSegment(true);
+        levelTimer = new Timer(100, e -> refreshAudioLevels());
+        addHierarchyListener(e -> {
+            if ((e.getChangeFlags() & HierarchyEvent.SHOWING_CHANGED) != 0) {
+                if (isShowing()) {
+                    levelTimer.start();
+                } else {
+                    levelTimer.stop();
+                }
+            }
+        });
     }
 
     private void loadConfig() {
@@ -118,6 +172,7 @@ public class SettingsPanel extends JPanel {
 
         // general
         botToken.setText(Utils.nullToEmptyString(cfg.botToken));
+        updateTokenVisibility();
         autoLogin.setSelected(cfg.isAutoLogin());
         updateAutoLoginEnabled();
 
@@ -128,17 +183,16 @@ public class SettingsPanel extends JPanel {
         updateListenEnabled();
         {
             DefaultListModel<RecordingDeviceItem> model = new DefaultListModel<>();
-            //model.addElement(null);
-            BASS_DEVICEINFO info = BASS_DEVICEINFO.allocate();
-            for (int device = 0; Bass.BASS_RecordGetDeviceInfo(device, info); device++) {
-                model.addElement(new RecordingDeviceItem(info.getName(), device));
+            List<InputDeviceDescriptor> devices = InputDeviceService.listInputDevices();
+            for (InputDeviceDescriptor device : devices) {
+                model.addElement(new RecordingDeviceItem(device));
             }
-            info.release();
             recordingDevices.setModel(model);
+            InputDeviceDescriptor selected = InputDeviceService.resolveConfiguredInputDevice(cfg);
             for (int i = 0; i < model.getSize(); i++) {
                 RecordingDeviceItem recordingDevice = model.get(i);
-                String recordingDeviceName = recordingDevice != null ? recordingDevice.getName() : null;
-                if (Objects.equals(recordingDeviceName, cfg.recordingDevice)) {
+                InputDeviceDescriptor descriptor = recordingDevice != null ? recordingDevice.getDescriptor() : null;
+                if (Objects.equals(descriptor, selected)) {
                     recordingDevices.setSelectedIndex(i);
                     break;
                 }
@@ -146,17 +200,17 @@ public class SettingsPanel extends JPanel {
         }
         {
             DefaultListModel<PlaybackDeviceItem> model = new DefaultListModel<>();
-            //model.addElement(null);
-            BASS_DEVICEINFO info = BASS_DEVICEINFO.allocate();
-            for (int device = 0; Bass.BASS_GetDeviceInfo(device, info); device++) {
-                model.addElement(new PlaybackDeviceItem(info.getName(), device));
+            model.addElement(new PlaybackDeviceItem(null, "(Default playback device)"));
+            for (PlaybackDeviceDescriptor device : PlaybackDeviceService.listPlaybackDevices()) {
+                model.addElement(new PlaybackDeviceItem(device.getId(), device.getListLabel()));
             }
-            info.release();
             playbackDevices.setModel(model);
             for (int i = 0; i < model.getSize(); i++) {
                 PlaybackDeviceItem playbackDeviceItem = model.get(i);
+                String playbackDeviceId = playbackDeviceItem != null ? playbackDeviceItem.getId() : null;
                 String playbackDeviceName = playbackDeviceItem != null ? playbackDeviceItem.getName() : null;
-                if (Objects.equals(playbackDeviceName, cfg.playbackDevice)) {
+                if (Objects.equals(playbackDeviceId, cfg.playbackDevice)
+                        || Objects.equals(playbackDeviceName, cfg.playbackDevice)) {
                     playbackDevices.setSelectedIndex(i);
                     break;
                 }
@@ -164,6 +218,8 @@ public class SettingsPanel extends JPanel {
         }
         speakThresholdEnabled.setSelected(cfg.getSpeakThresholdEnabled());
         speakThreshold.setValue((int) (cfg.getSpeakThreshold() * 100));
+        inputVolume.setValue((int) Math.round(cfg.getInputVolume() * 100));
+        outputVolume.setValue((int) Math.round(cfg.getOutputVolume() * 100));
         updateSpeakThresholdEnabled();
     }
 
@@ -192,9 +248,13 @@ public class SettingsPanel extends JPanel {
                         .create()
                         .add("c:p") // general
                         .add("c:p")
+                        .add("c:p")
                         .gapUnrelated().add("c:p")
                         .add("c:p")
                         .add("t:p")
+                        .add("c:p")
+                        .add("c:p")
+                        .add("c:p")
                         .add("c:p", 4)
                         .build()
                 )
@@ -206,15 +266,29 @@ public class SettingsPanel extends JPanel {
                 /**/.add(botToken).xy(3, row)
                 /**/.add("Auto login").xy(5, row)
                 /**/.add(autoLogin).xy(7, row)
+                .add("").xy(1, row += 2)
+                /**/.add(hideToken).xy(3, row)
                 .addSeparator("Audio").xyw(1, row += 2, 7)
                 .add("Mute/Unmute").xy(1, row += 2)
                 /**/.add(speakEnabled).xy(3, row)
                 /**/.add("Deafen/Undeafen").xy(5, row)
                 /**/.add(listenEnabled).xy(7, row)
+                .add("Send test").xy(1, row += 2)
+                /**/.add(testTone).xy(3, row)
+                /**/.add("Output test").xy(5, row)
+                /**/.add(outputTestTone).xy(7, row)
                 .add("Input device").xy(1, row += 2)
                 /**/.add(recordingDevices).xy(3, row)
                 /**/.add("Output device").xy(5, row)
                 /**/.add(playbackDevices).xy(7, row)
+                .add("Input level").xy(1, row += 2)
+                /**/.add(inputLevelBar).xy(3, row)
+                /**/.add("Output level").xy(5, row)
+                /**/.add(outputLevelBar).xy(7, row)
+                .add("Input volume").xy(1, row += 2)
+                /**/.add(inputVolume).xy(3, row)
+                .add("Output volume").xy(5, row)
+                /**/.add(outputVolume).xy(7, row)
                 .add("Voice activity").xy(1, row += 2)
                 /**/.add(speakThresholdEnabled).xy(3, row)
                 .add("Speak threshold").xy(1, row += 2)
@@ -239,6 +313,14 @@ public class SettingsPanel extends JPanel {
         autoLogin.setEnabled(enabled);
     }
 
+    private void updateTokenVisibility() {
+        if (botToken.getPassword().length == 0) {
+            botToken.setEchoChar((char) 0);
+            return;
+        }
+        botToken.setEchoChar(hideToken.isSelected() ? '*' : (char) 0);
+    }
+
     private void updateSpeakEnabled() {
         boolean enabled = DiscordAudioStreamBot.getConfig().getSpeakEnabled();
         ImageIcon icon = Utils.getIcon("icomoon/32px/031-mic.png", 24, true);
@@ -247,6 +329,10 @@ public class SettingsPanel extends JPanel {
         }
         speakEnabled.setIcon(icon);
         recordingDevices.setEnabled(enabled);
+        inputLevelBar.setEnabled(enabled);
+        testTone.setEnabled(enabled);
+        inputVolume.setEnabled(enabled);
+        updateOutputVolumeEnabled();
     }
 
     private void updateListenEnabled() {
@@ -256,11 +342,33 @@ public class SettingsPanel extends JPanel {
             icon = new ImageIcon(Utils.overlayImage((BufferedImage) icon.getImage(), Utils.getIcon("runee/32px/strike-through.png", 24, true).getImage()));
         }
         listenEnabled.setIcon(icon);
-        playbackDevices.setEnabled(enabled);
+        playbackDevices.setEnabled(true);
+        outputLevelBar.setEnabled(DiscordAudioStreamBot.getConfig().getSpeakEnabled() || enabled);
+        outputTestTone.setEnabled(true);
+        updateOutputVolumeEnabled();
     }
 
     private void updateSpeakThresholdEnabled() {
         boolean enabled = DiscordAudioStreamBot.getConfig().getSpeakThresholdEnabled();
         speakThreshold.setEnabled(enabled);
+    }
+
+    private void updateOutputVolumeEnabled() {
+        outputVolume.setEnabled(true);
+    }
+
+    private void refreshAudioLevels() {
+        RecordingDeviceItem recordingDeviceItem = recordingDevices.getSelectedValue();
+        InputDeviceDescriptor recordingDevice = recordingDeviceItem != null ? recordingDeviceItem.getDescriptor() : null;
+        PlaybackDeviceItem playbackDeviceItem = playbackDevices.getSelectedValue();
+        String playbackDevice = playbackDeviceItem != null ? playbackDeviceItem.getId() : null;
+
+        inputLevelBar.setLevel(DiscordAudioStreamBot.getConfig().getSpeakEnabled()
+                ? DiscordAudioStreamBot.getInstance().getInputVisualLevel(recordingDevice)
+                : 0d);
+        outputLevelBar.setLevel((DiscordAudioStreamBot.getConfig().getSpeakEnabled()
+                || DiscordAudioStreamBot.getConfig().getListenEnabled())
+                ? DiscordAudioStreamBot.getInstance().getAppOutputVisualLevel(recordingDevice, playbackDevice)
+                : 0d);
     }
 }

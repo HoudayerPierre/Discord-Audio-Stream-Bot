@@ -1,19 +1,19 @@
 package net.runee.gui.listitems;
 
-public class RecordingDeviceItem {
-    private final String name;
-    private final int device;
+import net.runee.audio.InputDeviceDescriptor;
 
-    public RecordingDeviceItem(String name, int device) {
-        this.name = name;
-        this.device = device;
+public class RecordingDeviceItem {
+    private final InputDeviceDescriptor descriptor;
+
+    public RecordingDeviceItem(InputDeviceDescriptor descriptor) {
+        this.descriptor = descriptor;
     }
 
     public String getName() {
-        return name;
+        return descriptor != null ? descriptor.getDisplayName() : null;
     }
 
-    public int getDevice() {
-        return device;
+    public InputDeviceDescriptor getDescriptor() {
+        return descriptor;
     }
 }

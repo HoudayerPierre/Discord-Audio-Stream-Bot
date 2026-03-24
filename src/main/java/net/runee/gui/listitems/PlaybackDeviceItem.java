@@ -1,19 +1,19 @@
 package net.runee.gui.listitems;
 
 public class PlaybackDeviceItem {
+    private final String id;
     private final String name;
-    private final int device;
 
-    public PlaybackDeviceItem(String name, int device) {
+    public PlaybackDeviceItem(String id, String name) {
+        this.id = id;
         this.name = name;
-        this.device = device;
+    }
+
+    public String getId() {
+        return id;
     }
 
     public String getName() {
         return name;
-    }
-
-    public int getDevice() {
-        return device;
     }
 }

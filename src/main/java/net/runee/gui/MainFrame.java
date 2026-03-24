@@ -9,6 +9,7 @@ import com.jgoodies.looks.windows.WindowsLookAndFeel;
 import jouvieje.bass.BassInit;
 import net.dv8tion.jda.api.JDA;
 import net.runee.DiscordAudioStreamBot;
+import net.runee.audio.InputDeviceService;
 import net.runee.gui.components.MaintenancePanel;
 import net.runee.gui.components.HomePanel;
 import net.runee.gui.components.SettingsPanel;
@@ -53,6 +54,7 @@ public class MainFrame extends JFrame implements Runnable {
 
         // load bass natives
         BassInit.loadLibraries();
+        InputDeviceService.logLinuxAudioDiscovery(DiscordAudioStreamBot.getConfig());
 
         // run app
         EventQueue.invokeLater(getInstance());

@@ -531,22 +531,6 @@ public final class Utils {
         return result.toArray(new String[0]);
     }
 
-    public static int getRecordingDeviceHandle(String deviceName) {
-        if (deviceName != null) {
-            BASS_DEVICEINFO info = BASS_DEVICEINFO.allocate();
-            for (int device = 0; Bass.BASS_RecordGetDeviceInfo(device, info); device++) {
-                if (deviceName.equals(info.getName())) {
-                    info.release();
-                    return device;
-                }
-            }
-            info.release();
-            throw new RuntimeException("Recording device '" + deviceName + "' not found!");
-        } else {
-            return 0;
-        }
-    }
-
     public static int getPlaybackDeviceHandle(String deviceName) {
         if (deviceName != null) {
             BASS_DEVICEINFO info = BASS_DEVICEINFO.allocate();

@@ -2,12 +2,16 @@ package net.runee;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import club.minnced.discord.jdave.interop.JDaveSessionFactory;
 import net.dv8tion.jda.api.EmbedBuilder;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.Permission;
+import net.dv8tion.jda.api.audio.AudioModuleConfig;
 import net.dv8tion.jda.api.audio.AudioReceiveHandler;
 import net.dv8tion.jda.api.audio.AudioSendHandler;
+import net.dv8tion.jda.api.audio.SpeakingMode;
+import net.dv8tion.jda.api.audio.factory.IAudioSendFactory;
 import net.dv8tion.jda.api.audio.hooks.ConnectionListener;
 import net.dv8tion.jda.api.audio.hooks.ConnectionStatus;
 import net.dv8tion.jda.api.entities.*;
@@ -27,6 +31,9 @@ import net.runee.commands.settings.AutoJoinAudioCommand;
 import net.runee.commands.settings.BindCommand;
 import net.runee.commands.settings.FollowAudioCommand;
 import net.runee.commands.user.*;
+import net.runee.audio.InputDeviceDescriptor;
+import net.runee.audio.InputDeviceService;
+import net.runee.audio.SendPathMode;
 import net.runee.errors.BassException;
 import net.runee.errors.CommandException;
 import net.runee.gui.MainFrame;
@@ -98,6 +105,11 @@ public class DiscordAudioStreamBot extends ListenerAdapter {
 
     // data
     private JDA jda;
+    private SpeakHandler standaloneInputMonitor;
+    private InputDeviceDescriptor standaloneInputDescriptor;
+    private ListenHandler standaloneLoopbackOutput;
+    private String standaloneLoopbackPlaybackDevice;
+    private String standaloneRoutingLogState;
 
     // convenience
     private Map<String, Command> commands;
@@ -116,6 +128,7 @@ public class DiscordAudioStreamBot extends ListenerAdapter {
                         GatewayIntent.DIRECT_MESSAGES
                         //GatewayIntent.DIRECT_MESSAGE_REACTIONS
                 )
+                .setAudioModuleConfig(createAudioModuleConfig())
                 .addEventListeners(this)
                 .setEnableShutdownHook(false)
                 .build()
@@ -136,6 +149,90 @@ public class DiscordAudioStreamBot extends ListenerAdapter {
         if (jda != null) {
             jda.shutdown();
         }
+    }
+
+    private AudioModuleConfig createAudioModuleConfig() {
+        AudioModuleConfig config = new AudioModuleConfig()
+                .withDaveSessionFactory(new JDaveSessionFactory());
+
+        if (isNativeAudioSendDisabled()) {
+            logger.warn("Native JDA audio send factory disabled by DASB_DISABLE_NATIVE_SEND");
+            return config;
+        }
+
+        IAudioSendFactory audioSendFactory = createNativeAudioSendFactory();
+        if (audioSendFactory != null) {
+            logger.info("Using native JDA audio send factory: {}", audioSendFactory.getClass().getName());
+            config.withAudioSendFactory(audioSendFactory);
+        } else {
+            logger.warn("Native JDA audio send factory was not found; falling back to default send factory");
+        }
+
+        return config;
+    }
+
+    private boolean isNativeAudioSendDisabled() {
+        String value = System.getenv("DASB_DISABLE_NATIVE_SEND");
+        return "1".equals(value) || "true".equalsIgnoreCase(value);
+    }
+
+    private SendPathMode getSendPathMode() {
+        String value = System.getenv("DASB_MINIMAL_TONE_SEND");
+        if ("1".equals(value) || "true".equalsIgnoreCase(value)) {
+            return SendPathMode.MINIMAL_TONE;
+        }
+        return SendPathMode.NORMAL;
+    }
+
+    private EnumSet<SpeakingMode> getSpeakingModes() {
+        String configured = System.getenv("DASB_SPEAKING_MODE");
+        EnumSet<SpeakingMode> modes = EnumSet.noneOf(SpeakingMode.class);
+        if (configured == null || configured.isBlank()) {
+            modes.add(SpeakingMode.VOICE);
+            return modes;
+        }
+
+        for (String rawPart : configured.split(",")) {
+            String part = rawPart.trim().toUpperCase(Locale.ROOT);
+            if (part.isEmpty()) {
+                continue;
+            }
+            switch (part) {
+                case "VOICE" -> modes.add(SpeakingMode.VOICE);
+                case "SOUNDSHARE", "SOUND_SHARE" -> modes.add(SpeakingMode.SOUNDSHARE);
+                case "PRIORITY" -> modes.add(SpeakingMode.PRIORITY);
+                default -> logger.warn("Ignoring unsupported DASB_SPEAKING_MODE value '{}'", rawPart);
+            }
+        }
+
+        if (modes.isEmpty()) {
+            modes.add(SpeakingMode.VOICE);
+        }
+        return modes;
+    }
+
+    private IAudioSendFactory createNativeAudioSendFactory() {
+        String[] candidateClassNames = {
+                "com.sedmelluq.discord.lavaplayer.jdaudp.NativeAudioSendFactory",
+                "club.minnced.udpqueue.NativeAudioSendFactory"
+        };
+
+        for (String className : candidateClassNames) {
+            try {
+                Class<?> clazz = Class.forName(className);
+                Object instance = clazz.getDeclaredConstructor().newInstance();
+                if (instance instanceof IAudioSendFactory) {
+                    return (IAudioSendFactory) instance;
+                }
+                logger.warn("Resolved audio send factory class {} but it does not implement IAudioSendFactory", className);
+            } catch (ClassNotFoundException ignored) {
+                // Try the next known package name.
+            } catch (ReflectiveOperationException ex) {
+                logger.warn("Failed to instantiate audio send factory {}", className, ex);
+            }
+        }
+
+        return null;
     }
 
     public JDA getJDA() {
@@ -344,6 +441,8 @@ public class DiscordAudioStreamBot extends ListenerAdapter {
                             AudioSendHandler sendingHandler = audioManager.getSendingHandler();
                             if (sendingHandler instanceof SpeakHandler) {
                                 ((SpeakHandler) sendingHandler).setPlaying(true);
+                            } else if (sendingHandler instanceof ToneAudioSendHandler) {
+                                ((ToneAudioSendHandler) sendingHandler).setPlaying(true);
                             }
                             break;
                         }
@@ -351,6 +450,8 @@ public class DiscordAudioStreamBot extends ListenerAdapter {
                             AudioSendHandler sendingHandler = audioManager.getSendingHandler();
                             if (sendingHandler instanceof SpeakHandler) {
                                 ((SpeakHandler) sendingHandler).setPlaying(false);
+                            } else if (sendingHandler instanceof ToneAudioSendHandler) {
+                                ((ToneAudioSendHandler) sendingHandler).setPlaying(false);
                             }
                             EventQueue.invokeLater(() -> MainFrame.getInstance().tabHome.onAudioPing(channel.getGuild(), null));
                             break;
@@ -379,21 +480,35 @@ public class DiscordAudioStreamBot extends ListenerAdapter {
         }
     }
 
-    public void updateSpeakState(AudioManager audioManager, Boolean speakEnabled, String recordingDevice) {
+    public void updateSpeakState(AudioManager audioManager, Boolean speakEnabled, InputDeviceDescriptor recordingDevice) {
         speakEnabled = speakEnabled != null ? speakEnabled : config.getSpeakEnabled();
-        recordingDevice = recordingDevice != null ? recordingDevice : config.recordingDevice;
+        recordingDevice = recordingDevice != null ? recordingDevice : InputDeviceService.resolveConfiguredInputDevice(config);
+        SendPathMode sendPathMode = getSendPathMode();
 
         // audio send handler
         AudioSendHandler sendingHandler = audioManager.getSendingHandler();
         if (speakEnabled) {
-            if (sendingHandler == null) {
-                sendingHandler = new SpeakHandler();
+            if (sendPathMode == SendPathMode.NORMAL && recordingDevice == null) {
+                logger.warn("No recording device is configured or discoverable for guild {}", audioManager.getGuild().getName());
+                sendingHandler = null;
+                speakEnabled = false;
             }
-            if (sendingHandler instanceof SpeakHandler) {
+            if (sendingHandler == null) {
+                sendingHandler = createSendingHandler(sendPathMode, audioManager.isConnected());
+            } else if (!isCompatibleSendingHandler(sendingHandler, sendPathMode)) {
+                if (sendingHandler instanceof Closeable) {
+                    Utils.closeQuiet((Closeable) sendingHandler);
+                }
+                sendingHandler = createSendingHandler(sendPathMode, audioManager.isConnected());
+            }
+            if (speakEnabled && sendPathMode == SendPathMode.NORMAL && sendingHandler instanceof SpeakHandler) {
                 try {
-                    ((SpeakHandler) sendingHandler).openRecordingDevice(Utils.getRecordingDeviceHandle(recordingDevice), audioManager.isConnected());
-                } catch (BassException ex) {
-                    logger.error("Failed to open recording device '" + recordingDevice + "'", ex);
+                    ((SpeakHandler) sendingHandler).openRecordingDevice(recordingDevice, audioManager.isConnected());
+                } catch (Exception ex) {
+                    logger.error("Failed to open recording device '{}' via {}",
+                            recordingDevice.getDisplayName(),
+                            recordingDevice.getBackend().getDisplayName(),
+                            ex);
                     sendingHandler = null;
                     speakEnabled = false;
                 }
@@ -407,7 +522,31 @@ public class DiscordAudioStreamBot extends ListenerAdapter {
             }
         }
         audioManager.setSendingHandler(sendingHandler);
+        refreshConnectedSendLoopbackRouting();
         audioManager.setSelfMuted(!speakEnabled);
+        if (speakEnabled) {
+            EnumSet<SpeakingMode> speakingModes = getSpeakingModes();
+            audioManager.setSpeakingMode(speakingModes);
+            logger.info("Configured send path for guild {} as {}", audioManager.getGuild().getName(), sendPathMode);
+            logger.info("Configured speaking mode for guild {} to {}", audioManager.getGuild().getName(), speakingModes);
+        } else {
+            audioManager.setSpeakingMode(EnumSet.of(SpeakingMode.VOICE));
+        }
+    }
+
+    private AudioSendHandler createSendingHandler(SendPathMode sendPathMode, boolean connected) {
+        if (sendPathMode == SendPathMode.MINIMAL_TONE) {
+            logger.warn("Using minimal tone-only send path (DASB_MINIMAL_TONE_SEND)");
+            return new ToneAudioSendHandler(connected);
+        }
+        return new SpeakHandler();
+    }
+
+    private boolean isCompatibleSendingHandler(AudioSendHandler sendingHandler, SendPathMode sendPathMode) {
+        if (sendPathMode == SendPathMode.MINIMAL_TONE) {
+            return sendingHandler instanceof ToneAudioSendHandler;
+        }
+        return sendingHandler instanceof SpeakHandler;
     }
 
     public void updateListenState(AudioManager audioManager, Boolean listenEnabled, String playbackDevice) {
@@ -422,8 +561,8 @@ public class DiscordAudioStreamBot extends ListenerAdapter {
             }
             if (receivingHandler instanceof ListenHandler) {
                 try {
-                    ((ListenHandler) receivingHandler).openPlaybackDevice(Utils.getPlaybackDeviceHandle(playbackDevice));
-                } catch (BassException ex) {
+                    ((ListenHandler) receivingHandler).openPlaybackDevice(playbackDevice);
+                } catch (Exception ex) {
                     logger.error("Failed to open playback device '" + playbackDevice + "'", ex);
                     receivingHandler = null;
                     listenEnabled = false;
@@ -442,26 +581,92 @@ public class DiscordAudioStreamBot extends ListenerAdapter {
     }
 
     public void setSpeakEnabled(boolean speakEnabled) {
+        if (!speakEnabled) {
+            closeStandaloneInputMonitor();
+            closeStandaloneLoopbackOutput();
+        } else if (config.getListenEnabled()) {
+            refreshStandaloneLoopbackOutput(config.playbackDevice);
+        }
         for (AudioManager audioManager : getConnectedAudioManagers()) {
             updateSpeakState(audioManager, speakEnabled, null);
         }
+        refreshConnectedSendLoopbackRouting();
     }
 
     public void setListenEnabled(boolean listenEnabled) {
         for (AudioManager audioManager : getConnectedAudioManagers()) {
             updateListenState(audioManager, listenEnabled, null);
         }
+        if (listenEnabled && config.getSpeakEnabled()) {
+            refreshStandaloneLoopbackOutput(config.playbackDevice);
+        } else {
+            closeStandaloneLoopbackOutput();
+        }
+        refreshConnectedSendLoopbackRouting();
     }
 
-    public void setRecordingDevice(String recordingDevice) {
+    public void setRecordingDevice(InputDeviceDescriptor recordingDevice) {
+        if (getConnectedAudioManagers().isEmpty()) {
+            refreshStandaloneLocalAudio(recordingDevice, config.playbackDevice);
+        } else {
+            closeStandaloneInputMonitor();
+            if (config.getListenEnabled()) {
+                refreshStandaloneLoopbackOutput(config.playbackDevice);
+            } else {
+                closeStandaloneLoopbackOutput();
+            }
+        }
         for (AudioManager audioManager : getConnectedAudioManagers()) {
             updateSpeakState(audioManager, null, recordingDevice);
         }
+        refreshConnectedSendLoopbackRouting();
     }
 
     public void setPlaybackDevice(String playbackDevice) {
+        if (config.getListenEnabled()) {
+            refreshStandaloneLoopbackOutput(playbackDevice);
+        } else {
+            closeStandaloneLoopbackOutput();
+        }
         for (AudioManager audioManager : getConnectedAudioManagers()) {
             updateListenState(audioManager, null, playbackDevice);
+        }
+        refreshConnectedSendLoopbackRouting();
+    }
+
+    public void playSendTestTone() {
+        boolean queued = false;
+        for (AudioManager audioManager : getConnectedAudioManagers()) {
+            AudioSendHandler sendingHandler = audioManager.getSendingHandler();
+            if (sendingHandler instanceof SpeakHandler) {
+                ((SpeakHandler) sendingHandler).playTestTone();
+                queued = true;
+            } else if (sendingHandler instanceof ToneAudioSendHandler) {
+                ((ToneAudioSendHandler) sendingHandler).playTestTone();
+                queued = true;
+            }
+        }
+        if (!queued && standaloneInputMonitor != null) {
+            standaloneInputMonitor.playTestTone();
+            queued = true;
+        }
+        if (!queued) {
+            logger.warn("Test tone requested, but no active sending handler is attached to a connected guild");
+        }
+    }
+
+    public void playOutputTestTone() {
+        boolean queued = false;
+        for (AudioManager audioManager : getConnectedAudioManagers()) {
+            AudioReceiveHandler receivingHandler = audioManager.getReceivingHandler();
+            if (receivingHandler instanceof ListenHandler) {
+                ((ListenHandler) receivingHandler).playTestTone();
+                queued = true;
+            }
+        }
+        if (!queued) {
+            logger.warn("Local playback test requested without an active listening handler; using standalone local playback test");
+            ListenHandler.playStandaloneTestTone(config.playbackDevice);
         }
     }
 
@@ -476,6 +681,170 @@ public class DiscordAudioStreamBot extends ListenerAdapter {
             return result;
         } else {
             return Collections.emptyList();
+        }
+    }
+
+    public double getInputVisualLevel(InputDeviceDescriptor recordingDevice) {
+        if (!config.getSpeakEnabled()) {
+            closeStandaloneInputMonitor();
+            closeStandaloneLoopbackOutput();
+            return 0d;
+        }
+        if (getConnectedAudioManagers().isEmpty()) {
+            refreshStandaloneLocalAudio(recordingDevice, config.playbackDevice);
+        } else {
+            if (config.getListenEnabled()) {
+                refreshStandaloneLoopbackOutput(config.playbackDevice);
+            } else {
+                closeStandaloneLoopbackOutput();
+            }
+            refreshConnectedSendLoopbackRouting();
+        }
+        return SpeakHandler.getVisualLevel(recordingDevice);
+    }
+
+    public double getAppOutputVisualLevel(InputDeviceDescriptor recordingDevice, String playbackDevice) {
+        double outputLevel = 0d;
+        if (config.getSpeakEnabled()) {
+            if (getConnectedAudioManagers().isEmpty()) {
+                refreshStandaloneLocalAudio(recordingDevice, playbackDevice);
+            } else {
+                if (config.getListenEnabled()) {
+                    refreshStandaloneLoopbackOutput(playbackDevice);
+                } else {
+                    closeStandaloneLoopbackOutput();
+                }
+                refreshConnectedSendLoopbackRouting();
+            }
+            outputLevel = Math.max(outputLevel, SpeakHandler.getVisualLevel(recordingDevice));
+        }
+        if (!config.getListenEnabled()) {
+            closeStandaloneLoopbackOutput();
+            return outputLevel;
+        }
+        if (!getConnectedAudioManagers().isEmpty()) {
+            return Math.max(outputLevel, ListenHandler.getVisualLevel(playbackDevice));
+        }
+        refreshStandaloneLocalAudio(recordingDevice, playbackDevice);
+        return Math.max(outputLevel, ListenHandler.getVisualLevel(playbackDevice));
+    }
+
+    private void refreshStandaloneLocalAudio(InputDeviceDescriptor recordingDevice, String playbackDevice) {
+        if (!config.getSpeakEnabled()) {
+            closeStandaloneInputMonitor();
+            closeStandaloneLoopbackOutput();
+            return;
+        }
+        if (recordingDevice == null) {
+            recordingDevice = InputDeviceService.resolveConfiguredInputDevice(config);
+        }
+        if (recordingDevice == null) {
+            closeStandaloneInputMonitor();
+            closeStandaloneLoopbackOutput();
+            return;
+        }
+        if (config.getListenEnabled() && playbackDevice != null) {
+            refreshStandaloneLoopbackOutput(playbackDevice);
+        } else if (config.getListenEnabled() && playbackDevice == null) {
+            refreshStandaloneLoopbackOutput(null);
+        } else {
+            closeStandaloneLoopbackOutput();
+        }
+
+        String routingState = recordingDevice.getDisplayName()
+                + "|" + recordingDevice.getBackend().getDisplayName()
+                + "|" + (playbackDevice != null ? playbackDevice : "(Default playback device)");
+        if (!Objects.equals(standaloneRoutingLogState, routingState)) {
+            standaloneRoutingLogState = routingState;
+            logger.info("Standalone local audio routing: input={} [{}], output={}",
+                    recordingDevice.getDisplayName(),
+                    recordingDevice.getBackend().getDisplayName(),
+                    playbackDevice != null ? playbackDevice : "(Default playback device)");
+        }
+
+        if (standaloneInputMonitor != null && recordingDevice.equals(standaloneInputDescriptor)) {
+            standaloneInputMonitor.setPcmListener(standaloneLoopbackOutput != null
+                    ? standaloneLoopbackOutput::enqueueForPlayback
+                    : null);
+            return;
+        }
+        closeStandaloneInputMonitor();
+        try {
+            standaloneInputMonitor = new SpeakHandler();
+            standaloneInputMonitor.openRecordingDevice(recordingDevice, true);
+            standaloneInputMonitor.setPcmListener(standaloneLoopbackOutput != null
+                    ? standaloneLoopbackOutput::enqueueForPlayback
+                    : null);
+            standaloneInputDescriptor = recordingDevice;
+            logger.info("Started standalone input monitor for '{}'", recordingDevice.getDisplayName());
+        } catch (Exception ex) {
+            logger.warn("Failed to start standalone input monitor for '{}'", recordingDevice.getDisplayName(), ex);
+            closeStandaloneInputMonitor();
+            closeStandaloneLoopbackOutput();
+        }
+    }
+
+    private void refreshStandaloneLoopbackOutput(String playbackDevice) {
+        if (!config.getListenEnabled()) {
+            closeStandaloneLoopbackOutput();
+            return;
+        }
+        if (standaloneLoopbackOutput != null && Objects.equals(standaloneLoopbackPlaybackDevice, playbackDevice)) {
+            refreshConnectedSendLoopbackRouting();
+            return;
+        }
+        closeStandaloneLoopbackOutput();
+        try {
+            standaloneLoopbackOutput = new ListenHandler();
+            standaloneLoopbackOutput.openPlaybackDevice(playbackDevice);
+            standaloneLoopbackPlaybackDevice = playbackDevice;
+            refreshConnectedSendLoopbackRouting();
+            logger.info("Started standalone loopback output for '{}'",
+                    playbackDevice != null ? playbackDevice : "(Default playback device)");
+        } catch (Exception ex) {
+            logger.warn("Failed to start standalone loopback output for '{}'",
+                    playbackDevice != null ? playbackDevice : "(Default playback device)",
+                    ex);
+            closeStandaloneLoopbackOutput();
+        }
+    }
+
+    private void closeStandaloneInputMonitor() {
+        if (standaloneInputMonitor != null) {
+            Utils.closeQuiet(standaloneInputMonitor);
+            standaloneInputMonitor = null;
+            standaloneInputDescriptor = null;
+        }
+        if (standaloneLoopbackOutput == null) {
+            standaloneRoutingLogState = null;
+        }
+    }
+
+    private void closeStandaloneLoopbackOutput() {
+        if (standaloneLoopbackOutput != null) {
+            Utils.closeQuiet(standaloneLoopbackOutput);
+            standaloneLoopbackOutput = null;
+            standaloneLoopbackPlaybackDevice = null;
+        }
+        if (standaloneInputMonitor == null) {
+            standaloneRoutingLogState = null;
+        }
+        refreshConnectedSendLoopbackRouting();
+    }
+
+    private void refreshConnectedSendLoopbackRouting() {
+        SpeakHandler preferredHandler = null;
+        for (AudioManager audioManager : getConnectedAudioManagers()) {
+            AudioSendHandler sendingHandler = audioManager.getSendingHandler();
+            if (sendingHandler instanceof SpeakHandler) {
+                SpeakHandler speakHandler = (SpeakHandler) sendingHandler;
+                if (preferredHandler == null && config.getSpeakEnabled() && standaloneLoopbackOutput != null) {
+                    preferredHandler = speakHandler;
+                    speakHandler.setPcmListener(standaloneLoopbackOutput::enqueueForPlayback);
+                } else {
+                    speakHandler.setPcmListener(null);
+                }
+            }
         }
     }
 }
