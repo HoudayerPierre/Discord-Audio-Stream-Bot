@@ -116,8 +116,10 @@ public class MainFrame extends JFrame implements Runnable {
         initComponents();
         layoutComponents();
 
-        setMinimumSize(new Dimension(800, 600));
+        setMinimumSize(new Dimension(800, 760));
         pack();
+        Dimension packedSize = getSize();
+        setSize(new Dimension(Math.max(packedSize.width, 800), Math.max(packedSize.height, 820)));
     }
 
     private void initComponents() {
